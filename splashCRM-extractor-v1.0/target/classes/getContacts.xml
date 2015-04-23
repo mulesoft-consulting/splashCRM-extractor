@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:json="http://www.mulesoft.org/schema/mule/json" 
+	xmlns:db="http://www.mulesoft.org/schema/mule/db" 
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" version="EE-3.6.1"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd">
+	<flow processingStrategy="synchronous"  name="getContacts" tracking:enable-default-events="true">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="getContacts" doc:name="receive getContact message"/>
+        <set-variable variableName="http.query.params" value="#[message.inboundProperties['http.query.params']]" doc:name="save queryParams"/>
+        <set-variable variableName="page" value="#[message.inboundProperties['page']]" doc:name="save page #"/>
+        <http:request config-ref="HTTP_splashCRM_API" path="${splash.api.path}/contacts" method="GET" doc:name="Get page of contacts">
+            <http:request-builder>
+                <http:query-param paramName="page" value="#[message.inboundProperties['page']]"/>
+                <http:query-param paramName="per_page" value="#[message.inboundProperties['http.query.params']['per_page']]"/>
+                <http:query-param paramName="updated_since" value="#[message.inboundProperties['http.query.params']['updated_since']]"/>
+                <http:query-param paramName="event_ids" value="#[message.inboundProperties['http.query.params']['event_ids']]"/>
+                <http:query-param paramName="origin" value="#[message.inboundProperties['http.query.params']['origin']]"/>
+                <http:header headerName="Authorization" value="SplashCRM ${splash.api.token}"/>
+            </http:request-builder>
+        </http:request>
+        <json:json-to-object-transformer returnClass="java.util.Map" ignoreBadInput="true" doc:name="JSON to Object"/>
+        <tracking:custom-event event-name="splashCRM Contact pull" doc:name="Custom Business Event">
+            <tracking:meta-data key="numberOfContacts" value="#[payload['data'].count]"/>
+            <tracking:meta-data key="updated_since" value="#[flowVars['http.query.params']['updated_since']]"/>
+        </tracking:custom-event>
+        <logger message="Starting to process #[payload['data'].count] contacts updated_since #[flowVars['http.query.params']['updated_since']]" level="INFO" doc:name="Logger"/>
+        <choice doc:name="Choice">
+            <when expression="#[payload['data'].?contacts.size() &gt; 0]">
+                <set-payload value="#[payload['data'].contacts]" doc:name="Extract collection"/>
+                <foreach doc:name="For Each Contact">
+                    <flow-ref name="upsertContact" doc:name="upsertContact"/>
+                </foreach>
+                <set-property propertyName="http.query.params" value="#[flowVars['http.query.params']]" doc:name="Restore queryParams"/>
+                <expression-component doc:name="Increment page #"><![CDATA[message.outboundProperties['page'] = Integer.parseInt(flowVars['page']) + 1;]]></expression-component>
+                <vm:outbound-endpoint exchange-pattern="one-way" path="getContacts" doc:name="get next page"/>
+            </when>
+            <otherwise>
+                <logger message="#[flow.'name'] no more contacts" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+		<catch-exception-strategy doc:name="Catch Exception Strategy">
+			<logger message="Invalid JSON" level="INFO" doc:name="Logger" />
+		</catch-exception-strategy>
+	</flow>
+	<flow name="upsertContact" tracking:enable-default-events="true">
+        <set-variable variableName="contact" value="#[payload]" doc:name="save contact"/>
+        <scatter-gather doc:name="Scatter-Gather">
+            <processor-chain>
+                <db:update config-ref="MySQL_Configuration" doc:name="UPDATE contact">
+                    <db:parameterized-query><![CDATA[UPDATE `splash`.`contact`
+SET
+`id` = #[payload['id']],
+`firstName` = #[payload['firstName']],
+`middleName` = #[payload['middleName']],
+`lastName` = #[payload['lastName']],
+`email` = #[payload['email']],
+`birthday` = #[payload['birthday']],
+`organization` = #[payload['organization']],
+`title` = #[payload['title']],
+`phone` = #[payload['phone']],
+`created` = #[payload['created']],
+`modified` = #[payload['modified']],
+`address` = #[payload['address']],
+`city` = #[payload['city']],
+`state` = #[payload['state']],
+`zipcode` = #[payload['zipcode']],
+`facebook_display_name` = #[payload['facebook_display_name']],
+`facebook_friends` = #[payload['facebook_friends']],
+`facebook_url` = #[payload['facebook_url']],
+`twitter_display_name` = #[payload['twitter_display_name']],
+`twitter_followers` = #[payload['twitter_followers']],
+`twitter_following` = #[payload['twitter_following']],
+`instagram_display_name` = #[payload['instagram_display_name']],
+`instagram_followers` = #[payload['instagram_followers']],
+`instagram_following` = #[payload['instagram_following']],
+`opted_in` = #[payload['opted_in']]
+WHERE `id` = #[payload['id']];]]></db:parameterized-query>
+                </db:update>
+                <choice doc:name="Choice">
+                    <when expression="#[payload == 0]">
+                        <set-payload value="#[flowVars.contact]" doc:name="Reset payload"/>
+                        <db:insert config-ref="MySQL_Configuration" doc:name="INSERT contact">
+                            <db:parameterized-query><![CDATA[INSERT INTO `splash`.`contact`
+(`id`,
+`firstName`,
+`middleName`,
+`lastName`,
+`email`,
+`birthday`,
+`organization`,
+`title`,
+`phone`,
+`created`,
+`modified`,
+`address`,
+`city`,
+`state`,
+`zipcode`,
+`facebook_display_name`,
+`facebook_friends`,
+`facebook_url`,
+`twitter_display_name`,
+`twitter_followers`,
+`twitter_following`,
+`instagram_display_name`,
+`instagram_followers`,
+`instagram_following`,
+`opted_in`)
+VALUES
+(#[payload['id']],
+#[payload['firstName']],
+#[payload['middleName']],
+#[payload['lastName']],
+#[payload['email']],
+#[payload['birthday']],
+#[payload['organization']],
+#[payload['title']],
+#[payload['phone']],
+#[payload['created']],
+#[payload['modified']],
+#[payload['address']],
+#[payload['city']],
+#[payload['state']],
+#[payload['zipcode']],
+#[payload['facebook_display_name']],
+#[payload['facebook_friends']],
+#[payload['facebook_url']],
+#[payload['twitter_display_name']],
+#[payload['twitter_followers']],
+#[payload['twitter_following']],
+#[payload['instagram_display_name']],
+#[payload['instagram_followers']],
+#[payload['instagram_following']],
+#[payload['opted_in']]);]]></db:parameterized-query>
+                        </db:insert>
+                        <logger message="#[flowVars['page']].#[flowVars['counter']] INSERT CONTACT #[flowVars['contact'].'first_name']] #[flowVars['contact'].'last_name']](#[flowVars['contact'].'id']])" level="INFO" doc:name="Logger"/>
+                    </when>
+                    <otherwise>
+                        <logger message="#[flowVars['page']].#[flowVars['counter']] UPDATE CONTACT #[flowVars['contact'].'first_name']] #[flowVars['contact'].'last_name']](#[flowVars['contact'].'id']])" level="INFO" doc:name="Logger"/>
+                    </otherwise>
+                </choice>
+            </processor-chain>
+            <choice doc:name="Choice">
+                <when expression="#[payload.?event_ids != null]">
+                    <set-payload value="#[payload.event_ids]" doc:name="Set Payload to event_ids"/>
+                    <foreach doc:name="For Each">
+                        <flow-ref name="upsertAttendance" doc:name="upsertAttendance"/>
+                    </foreach>
+                    <logger message="  UPSERT ATTENDANCE for #[flowVars['contact'].'first_name']] #[flowVars['contact'].'last_name']](#[flowVars['contact'].'id']])" level="INFO" doc:name="Logger"/>
+                </when>
+                <otherwise>
+                    <logger message="  No EVENT_IDs for #[flowVars['contact'].'first_name']] #[flowVars['contact'].'last_name']](#[flowVars['contact'].'id']])" level="INFO" doc:name="Logger"/>
+                </otherwise>
+            </choice>
+        </scatter-gather>
+	</flow>
+	<flow name="upsertAttendance" tracking:enable-default-events="true">
+        <set-variable variableName="attendance" value="#[payload]" doc:name="save attendance"/>
+        <db:update config-ref="MySQL_Configuration" doc:name="UPDATE attendance">
+            <db:parameterized-query><![CDATA[UPDATE `splash`.`attendance`
+SET
+`eventId` = #[payload],
+`contactId` = #[flowVars['contact'].'id']
+WHERE `eventId` = #[payload] AND `contactId` = #[flowVars['contact'].'id'];]]></db:parameterized-query>
+        </db:update>
+        <choice doc:name="Choice">
+            <when expression="#[payload == 0]">
+                <set-payload value="#[flowVars.attendance]" doc:name="Reset payload"/>
+                <db:insert config-ref="MySQL_Configuration" doc:name="INSERT attendance">
+                    <db:parameterized-query><![CDATA[INSERT INTO `splash`.`attendance`
+(`eventId`,
+`contactId`)
+VALUES
+(#[payload],
+#[flowVars['contact'].'id']);]]></db:parameterized-query>
+                </db:insert>
+                <logger message="--INSERTED ATTENDANCE for Event(#[payload]) #[flowVars['contact'].'first_name']] #[flowVars['contact'].'last_name']](#[flowVars['contact'].'id']])" level="INFO" doc:name="Logger"/>
+            </when>
+            <otherwise>
+                <logger message="--UPDATED ATTENDANCE for Event(#[payload]) #[flowVars['contact'].'first_name']] #[flowVars['contact'].'last_name']](#[flowVars['contact'].'id']])" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+	</flow>
+</mule>

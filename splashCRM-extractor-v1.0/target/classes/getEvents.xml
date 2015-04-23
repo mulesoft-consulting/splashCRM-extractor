@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:json="http://www.mulesoft.org/schema/mule/json" 
+	xmlns:db="http://www.mulesoft.org/schema/mule/db" 
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" version="EE-3.6.1"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd">
+	<flow processingStrategy="synchronous"  name="getEvents" tracking:enable-default-events="true">
+        <vm:inbound-endpoint exchange-pattern="one-way" path="getEvents" doc:name="receive getEvent message"/>
+        <set-variable variableName="http.query.params" value="#[message.inboundProperties['http.query.params']]" doc:name="save queryParams"/>
+        <set-variable variableName="page" value="#[message.inboundProperties['page']]" doc:name="save page #"/>
+        <http:request config-ref="HTTP_splashCRM_API" path="${splash.api.path}/events" method="GET" doc:name="Get page of events">
+            <http:request-builder>
+                <http:query-param paramName="page" value="#[message.inboundProperties['page']]"/>
+                <http:query-param paramName="per_page" value="#[message.inboundProperties['http.query.params']['per_page']]"/>
+                <http:query-param paramName="updated_since" value="#[message.inboundProperties['http.query.params']['updated_since']]"/>
+                <http:query-param paramName="user_info" value="#[message.inboundProperties['http.query.params']['user_info']]"/>
+                <http:query-param paramName="program" value="#[message.inboundProperties['http.query.params']['program']]"/>
+                <http:query-param paramName="event_types" value="#[message.inboundProperties['http.query.params']['event_types']]"/>
+                <http:query-param paramName="event_tags" value="#[message.inboundProperties['http.query.params']['event_tags']]"/>
+                <http:header headerName="Authorization" value="SplashCRM ${splash.api.token}"/>
+            </http:request-builder>
+        </http:request>
+        <json:json-to-object-transformer returnClass="java.util.Map" ignoreBadInput="true" doc:name="JSON to Object"/>
+        <tracking:custom-event event-name="splashCRM Contact pull" doc:name="Custom Business Event">
+            <tracking:meta-data key="numberOfContacts" value="#[payload['data'].count]"/>
+            <tracking:meta-data key="updated_since" value="#[flowVars['http.query.params']['updated_since']]"/>
+        </tracking:custom-event>
+        <logger message="Starting to process #[payload['data'].count] events updated_since #[flowVars['http.query.params']['updated_since']]" level="INFO" doc:name="Logger"/>
+        <choice doc:name="Choice">
+            <when expression="#[payload['data'].?events.size() &gt; 0]">
+                <set-payload value="#[payload['data'].events]" doc:name="Extract collection"/>
+                <foreach doc:name="For Each Event">
+                    <flow-ref name="upsertEvent" doc:name="upsertEvent"/>
+                </foreach>
+                <set-property propertyName="http.query.params" value="#[flowVars['http.query.params']]" doc:name="Restore queryParams"/>
+                <expression-component doc:name="Increment page #"><![CDATA[message.outboundProperties['page'] = Integer.parseInt(flowVars['page']) + 1;]]></expression-component>
+                <vm:outbound-endpoint exchange-pattern="one-way" path="getEvents" doc:name="get next page"/>
+            </when>
+            <otherwise>
+                <logger message="#[flow.'name'] no more events" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+		<catch-exception-strategy doc:name="Catch Exception Strategy">
+			<logger message="Invalid JSON" level="INFO" doc:name="Logger" />
+		</catch-exception-strategy>
+	</flow>
+	<flow name="upsertEvent" tracking:enable-default-events="true">
+        <set-variable variableName="event" value="#[payload]" doc:name="save event"/>
+        <db:update config-ref="MySQL_Configuration" doc:name="UPDATE event">
+            <db:parameterized-query><![CDATA[UPDATE `splash`.`event`
+SET
+`id` = #[payload.id],
+`title` = #[payload.title],
+`url` = #[payload.url],
+`description` = #[payload.description],
+`venue_name` = #[payload.venue_name],
+`address` = #[payload.address],
+`city` = #[payload.city],
+`state` = #[payload.state],
+`zipcode` = #[payload.zipcode],
+`country` = #[payload.country],
+`lat` = #[payload.lat],
+`lng` = #[payload.lng],
+`event_start` = #[payload.event_start.substring(0,19)],
+`event_timezone` = #[payload.event_timezone],
+`event_end` = #[payload.?event_end.substring(0,19)],
+`event_type` = #[payload.event_type],
+`event_type_id` = #[payload.event_type_id],
+`created` = #[payload.created],
+`tags` = #[payload.tags],
+`user_name` = #[payload.user_name],
+`user_email` = #[payload.user_email]
+WHERE `id` = #[payload.id];]]></db:parameterized-query>
+        </db:update>
+        <choice doc:name="Choice">
+            <when expression="#[payload == 0]">
+                <set-payload value="#[flowVars.event]" doc:name="Reset payload"/>
+                <db:insert config-ref="MySQL_Configuration" doc:name="INSERT event">
+                    <db:parameterized-query><![CDATA[INSERT INTO `splash`.`event`
+(`id`,
+`title`,
+`url`,
+`description`,
+`venue_name`,
+`address`,
+`city`,
+`state`,
+`zipcode`,
+`country`,
+`lat`,
+`lng`,
+`event_start`,
+`event_timezone`,
+`event_end`,
+`event_type`,
+`event_type_id`,
+`created`,
+`tags`,
+`user_name`,
+`user_email`)
+VALUES
+(#[payload.id],
+#[payload.title],
+#[payload.url],
+#[payload.description],
+#[payload.venue_name],
+#[payload.address],
+#[payload.city],
+#[payload.state],
+#[payload.zipcode],
+#[payload.country],
+#[if(payload['lat'] == '') {0}],
+#[if(payload['lng'] == '') { 0 }],
+#[payload.event_start.substring(0,19)],
+#[payload.event_timezone],
+#[payload.?event_end.substring(0,19)],
+#[payload.event_type],
+#[payload.event_type_id],
+#[payload.created],
+#[payload.tags],
+#[payload.user_name],
+#[payload.user_email]);]]></db:parameterized-query>
+                </db:insert>
+                <logger message="#[flowVars['page']].#[flowVars['counter']] INSERT EVENT #[flowVars.event['title']] #[flowVars.event['venue_name']]" level="INFO" doc:name="Logger"/>
+            </when>
+            <otherwise>
+                <logger message="#[flowVars['page']].#[flowVars['counter']] UPDATE EVENT #[flowVars.event['title']] #[flowVars.event['venue_name']]" level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+	</flow>
+</mule>

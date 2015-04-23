@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" version="EE-3.6.1"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd">
+
+    <flow name="trigger-getContacts" doc:description="Send in the postId on as the query string.
+
+example: http://localhost:8081/getCommentsForObject?562735083858496_646782528787084" tracking:enable-default-events="true">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/getContacts" doc:name="HTTP"/>
+        <set-property propertyName="http.query.params" value="#[message.inboundProperties['http.query.params']]" doc:name="put queryParams in messge properties"/>
+        <set-property propertyName="page" value="#[message.inboundProperties['http.query.params']['page']]" doc:name="set page #"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="getContacts" doc:name="send message to getContacts"/>
+        <logger level="INFO" doc:name="Logger"/>
+    </flow>
+    <flow name="trigger-getEvents" doc:description="Send in the postId on as the query string.
+
+example: http://localhost:8081/getCommentsForObject?562735083858496_646782528787084" tracking:enable-default-events="true">
+        <http:listener config-ref="HTTP_Listener_Configuration" path="/getEvents" doc:name="HTTP"/>
+        <set-property propertyName="http.query.params" value="#[message.inboundProperties['http.query.params']]" doc:name="put queryParams in messge properties"/>
+        <set-property propertyName="page" value="#[message.inboundProperties['http.query.params']['page']]" doc:name="set page #"/>
+        <vm:outbound-endpoint exchange-pattern="one-way" path="getEvents" doc:name="send message to getEvents"/>
+        <logger level="INFO" doc:name="Logger"/>
+    </flow>
+</mule>
